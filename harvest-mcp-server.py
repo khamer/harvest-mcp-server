@@ -1,7 +1,9 @@
 import os
 import json
 import httpx
+from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime
+from typing import Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
@@ -64,8 +66,59 @@ async def harvest_request(path, params=None, method="GET"):
         return response.json()
 
 
+def parse_asana_reference(
+    reference_link: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    parsed = urlsplit(reference_link)
+    if not parsed.scheme or not parsed.netloc:
+        return None, None, None
+
+    clean_permalink = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    path_segments = [segment for segment in parsed.path.split("/") if segment]
+    try:
+        project_index = path_segments.index("project")
+        task_index = path_segments.index("task")
+        group_id = path_segments[project_index + 1]
+        task_id = path_segments[task_index + 1]
+    except (ValueError, IndexError):
+        if len(path_segments) >= 3 and path_segments[0] == "0":
+            group_id = path_segments[1]
+            task_id = path_segments[2]
+        else:
+            return None, None, None
+
+    if not group_id or not task_id:
+        return None, None, None
+
+    return group_id, task_id, clean_permalink
+
+
+def build_notes_with_reference(
+    notes: Optional[str],
+    reference_title: Optional[str],
+    reference_link: Optional[str],
+) -> Optional[str]:
+    if notes:
+        return notes
+
+    if not reference_title and not reference_link:
+        return notes
+
+    reference_parts = []
+    if reference_title:
+        reference_parts.append(reference_title)
+    if reference_link:
+        reference_parts.append(reference_link)
+    reference_text = " ".join(reference_parts)
+    return reference_text or notes
+
+
 @mcp.tool()
-async def list_users(is_active: bool = None, page: int = None, per_page: int = None):
+async def list_users(
+    is_active: Optional[bool] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
+):
     """List all users in your Harvest account.
 
     Args:
@@ -102,11 +155,11 @@ async def get_user_details(user_id: int):
 
 @mcp.tool()
 async def list_time_entries(
-    user_id: int = None,
-    from_date: str = None,
-    to_date: str = None,
-    is_running: bool = None,
-    is_billable: bool = None,
+    user_id: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    is_running: Optional[bool] = None,
+    is_billable: Optional[bool] = None,
 ):
     """List time entries with optional filtering.
 
@@ -140,6 +193,8 @@ async def create_time_entry(
     spent_date: str,
     hours: float,
     notes: str | int | None = None,
+    reference_link: Optional[str] = None,
+    reference_title: Optional[str] = None,
 ):
     """Create a new time entry.
 
@@ -149,6 +204,8 @@ async def create_time_entry(
         spent_date: The date when the time was spent (YYYY-MM-DD)
         hours: The number of hours spent
         notes: Optional notes about the time entry
+        reference_link: Optional Asana task permalink
+        reference_title: Optional Asana task title for link text
     """
     if HARVEST_READ_ONLY:
         return READ_ONLY_MESSAGE
@@ -160,8 +217,26 @@ async def create_time_entry(
         "hours": hours,
     }
 
-    if notes is not None:
-        params["notes"] = str(notes)
+    clean_permalink = None
+    if reference_link:
+        group_id, asana_task_id, clean_permalink = parse_asana_reference(reference_link)
+        if group_id and asana_task_id and clean_permalink:
+            params["external_reference"] = {
+                "id": asana_task_id,
+                "group_id": group_id,
+                "permalink": clean_permalink,
+                "service": "app.asana.com",
+            }
+            if reference_title:
+                params["external_reference"]["name"] = reference_title
+
+    notes_with_reference = build_notes_with_reference(
+        str(notes) if notes is not None else None,
+        reference_title,
+        clean_permalink or reference_link,
+    )
+    if notes_with_reference:
+        params["notes"] = notes_with_reference
 
     response = await harvest_request("time_entries", params, method="POST")
     return json.dumps(response, indent=2)
@@ -188,6 +263,8 @@ async def start_timer(
     project_id: int,
     task_id: int,
     notes: str | int | None = None,
+    reference_link: Optional[str] = None,
+    reference_title: Optional[str] = None,
 ):
     """Start a new timer.
 
@@ -195,6 +272,8 @@ async def start_timer(
         project_id: The ID of the project to associate with the time entry
         task_id: The ID of the task to associate with the time entry
         notes: Optional notes about the time entry
+        reference_link: Optional Asana task permalink
+        reference_title: Optional Asana task title for link text
     """
     if HARVEST_READ_ONLY:
         return READ_ONLY_MESSAGE
@@ -205,8 +284,26 @@ async def start_timer(
         "spent_date": datetime.now().strftime("%Y-%m-%d"),
     }
 
-    if notes is not None:
-        params["notes"] = str(notes)
+    clean_permalink = None
+    if reference_link:
+        group_id, asana_task_id, clean_permalink = parse_asana_reference(reference_link)
+        if group_id and asana_task_id and clean_permalink:
+            params["external_reference"] = {
+                "id": asana_task_id,
+                "group_id": group_id,
+                "permalink": clean_permalink,
+                "service": "app.asana.com",
+            }
+            if reference_title:
+                params["external_reference"]["name"] = reference_title
+
+    notes_with_reference = build_notes_with_reference(
+        str(notes) if notes is not None else None,
+        reference_title,
+        clean_permalink or reference_link,
+    )
+    if notes_with_reference:
+        params["notes"] = notes_with_reference
 
     response = await harvest_request("time_entries", params, method="POST")
     return json.dumps(response, indent=2)
@@ -214,11 +311,11 @@ async def start_timer(
 
 @mcp.tool()
 async def list_projects(
-    client_id: int = None,
-    is_active: bool = None,
-    updated_since: str = None,
-    page: int = None,
-    per_page: int = None,
+    client_id: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    updated_since: Optional[str] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
 ):
     """List projects with optional filtering.
 
@@ -976,7 +1073,7 @@ async def delete_user_assignment(project_id: int, user_assignment_id: int):
 
 
 @mcp.tool()
-async def list_clients(is_active: bool = None):
+async def list_clients(is_active: Optional[bool] = None):
     """List clients with optional filtering.
 
     Args:
@@ -1002,7 +1099,7 @@ async def get_client_details(client_id: int):
 
 
 @mcp.tool()
-async def list_tasks(is_active: bool = None):
+async def list_tasks(is_active: Optional[bool] = None):
     """List all tasks with optional filtering.
 
     Args:
@@ -1018,11 +1115,11 @@ async def list_tasks(is_active: bool = None):
 
 @mcp.tool()
 async def get_unsubmitted_timesheets(
-    user_id: int = None,
-    from_date: str = None,
-    to_date: str = None,
-    page: int = None,
-    per_page: int = None,
+    user_id: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    page: Optional[int] = None,
+    per_page: Optional[int] = None,
 ):
     """Get unsubmitted timesheets (time entries that haven't been submitted for approval).
 
