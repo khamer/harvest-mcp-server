@@ -1,0 +1,20 @@
+harvest-mcp-server.py
+  s_34c678815d12f9::t_067a957ab3f3c3 119-120,316-318,1121-1122
+  s_34c678815d12f9::t_f466294dcb1c4a 234-239,266-267,275-276,287-301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38f383292a9839ec90fcb9c1c335e21cb9662450",
+  "prompts": {},
+  "sessions": {
+    "s_34c678815d12f9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f66aebc3-ddeb-49d5-a371-be9cadabcb91",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Kevin Hamer <kevin@imarc.com>"
+    }
+  }
+}
